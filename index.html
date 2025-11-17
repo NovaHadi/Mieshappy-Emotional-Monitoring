@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mieshappy Emotional Monitoring System (Web)</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Chart.js for visualization -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <!-- Load Face-API.js for real-time emotion detection (replacement for DeepFace in browser) -->
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+    
+    <!-- Konfigurasi Font & Theme -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #1a1a2e; /* Deep dark blue background */
+            color: #e0e0e0;
+        }
+        .container-shadow {
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+        .risk-low { background-color: #10b981; } /* Emerald 500 */
+        .risk-medium { background-color: #f59e0b; } /* Amber 500 */
+        .risk-high { background-color: #ef4444; } /* Red 500 */
+        
+        /* Video Container Styling */
+        #video-container {
+            width: 100%;
+            max-width: 640px;
+            aspect-ratio: 4/3;
+            background-color: #0d0d1e;
+            border: 3px solid #6366f1; /* Indigo 500 */
+            position: relative; /* Penting untuk Canvas Overlay */
+        }
+        #videoElement {
+            transform: scaleX(-1); /* Mirror the video feed */
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+        #overlayCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8 min-h-screen">
+
+    <div class="text-center mb-8">
+        <h1 class="text-3xl md:text-4xl font-extrabold text-[#9e7bff] mb-2">Mieshappy Emotional Monitoring (Web)</h1>
+        <p class="text-gray-400">Deteksi Emosi Real-time dan Prediksi Tingkat Stress dan Depresi</p>
+    </div>
+
+    <div class="flex flex-col lg:flex-row gap-8 max-w-7xl mx-auto">
+        
+        <!-- PANEL KIRI: VIDEO DAN METRIK -->
+        <div class="lg:w-1/3 flex flex-col space-y-6">
+            
+            <!-- VIDEO FEED -->
+            <div id="video-container" class="relative rounded-xl overflow-hidden container-shadow">
+                <video id="videoElement" autoplay playsinline></video>
+                <!-- Canvas untuk menggambar bounding box -->
+                <canvas id="overlayCanvas"></canvas>
+                <div id="loading-overlay" class="absolute inset-0 bg-black bg-opacity-80 flex items-center justify-center text-xl font-semibold z-20">
+                    Memuat Model AI...
+                </div>
+            </div>
+
+            <!-- METRIK STATUS -->
+            <div class="bg-[#2a2a47] p-4 rounded-xl container-shadow">
+                <h2 class="text-2xl font-bold mb-4 border-b border-[#4f46e5] pb-2 text-[#b8b3ff]">Status Emosi</h2>
+                
+                <div class="flex flex-col space-y-3">
+                    <div class="flex justify-between items-center text-lg">
+                        <span class="font-semibold text-gray-300">Emosi Terakhir:</span>
+                        <span id="current-emotion" class="font-bold text-yellow-300">None</span>
+                    </div>
+                    
+                    <div class="flex justify-between items-center text-lg">
+                        <span class="font-semibold text-gray-300">Valence Rata-rata:</span>
+                        <span id="avg-valence" class="font-bold text-white bg-[#4f46e5] px-3 py-1 rounded-full">0.00</span>
+                    </div>
+                    
+                    <div class="text-center pt-3">
+                        <span class="font-extrabold text-xl py-2 px-6 rounded-lg text-white transition-colors duration-500" id="risk-indicator">
+                            Risiko: RENDAH (Sehat)
+                        </span>
+                        <p class="text-sm text-gray-400 mt-2">Didasarkan pada rata-rata skor Valence.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- KONTROL -->
+            <div class="flex justify-center space-x-4">
+                <button onclick="startApp()" id="startButton" class="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-xl transition-all shadow-lg active:scale-95" disabled>
+                    START DETEKSI
+                </button>
+                <button onclick="stopDetection()" id="stopButton" class="bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-xl transition-all shadow-lg active:scale-95" disabled>
+                    STOP
+                </button>
+                <button onclick="resetData()" class="bg-gray-600 hover:bg-gray-700 text-white font-bold py-3 px-6 rounded-xl transition-all shadow-lg active:scale-95">
+                    RESET
+                </button>
+            </div>
+            <p class="text-sm text-center text-gray-500">Catatan: Menggunakan model AI yang berjalan langsung di browser Anda.</p>
+
+        </div>
+
+        <!-- PANEL KANAN: GRAFIK VISUALISASI -->
+        <div class="lg:w-2/3 flex flex-col space-y-6">
+            
+            <!-- GRAFIK BERSEJAJAR (Emotional Count dan Valence Trend) -->
+            <div class="flex flex-col md:flex-row gap-4">
+                
+                <!-- 1. Emotional Count Bar Chart -->
+                <div class="bg-[#2a2a47] p-4 rounded-xl container-shadow md:w-1/2">
+                    <h2 class="text-xl font-bold mb-3 text-[#b8b3ff]">A. Perhitungan Emosi Dominan</h2>
+                    <canvas id="emotionCountChart" class="w-full h-auto"></canvas>
+                </div>
+                
+                <!-- 2. Emotional Valence Trend Line Chart -->
+                <div class="bg-[#2a2a47] p-4 rounded-xl container-shadow md:w-1/2">
+                    <h2 class="text-xl font-bold mb-3 text-[#b8b3ff]">B. Tren Emotional Valence</h2>
+                    <canvas id="valenceTrendChart" class="w-full h-auto"></canvas>
+                </div>
+                
+            </div>
+
+            <div class="bg-[#2a2a47] p-4 rounded-xl container-shadow">
+                <h2 class="text-xl font-bold mb-3 text-[#b8b3ff]">Sistem Interpretasi Risiko</h2>
+                <div id="interpretive-feedback" class="text-gray-300 space-y-2">
+                    <p>Mulai deteksi untuk melihat interpretasi risiko kesehatan mental Anda...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- 1. KONFIGURASI DAN INIITALISASI ---
+
+        // Mapping Nilai Valence (Sama seperti DeepFace/Python)
+        const VALENCE_MAP = {
+            'happy': 2,
+            'surprise': 1,
+            'neutral': 1,
+            'sad': -2,
+            'angry': -2,
+            'fear': -2,
+            'disgust': -2
+        };
+        // NOTE: Face-API.js menggunakan labels: neutral, happy, sad, angry, fearful, disgusted, surprised.
+        const EMOTIONS = Object.keys(VALENCE_MAP);
+        
+        // Data Status Aplikasi
+        let isDetecting = false;
+        let emotionCounts = {};
+        let valenceHistory = [];
+        let timeSeriesData = []; // { count: number, valence: number }
+        let analysisCount = 0;
+        let avgValence = 0.0;
+        let detectionInterval = null; // Menggunakan requestAnimationFrame ID
+        let stream = null; // Untuk stream webcam
+        
+        // Chart Instances
+        let emotionCountChart = null;
+        let valenceTrendChart = null;
+
+        // Elemen DOM
+        const videoElement = document.getElementById('videoElement');
+        const overlayCanvas = document.getElementById('overlayCanvas');
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const startButton = document.getElementById('startButton');
+        const stopButton = document.getElementById('stopButton');
+        const currentEmotionEl = document.getElementById('current-emotion');
+        const avgValenceEl = document.getElementById('avg-valence');
+        const riskIndicatorEl = document.getElementById('risk-indicator');
+        const feedbackEl = document.getElementById('interpretive-feedback');
+        
+        // --- 2. MODEL LOADING (Face-API.js) ---
+
+        // Fungsi untuk memuat model Face-API.js
+        async function loadModels() {
+            // Menggunakan path GitHub yang stabil untuk model
+            const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights';
+
+            try {
+                loadingOverlay.textContent = "Memuat model AI (Tunggu Sebentar)...";
+                // Memuat model detektor wajah, landmark, dan ekspresi
+                await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+                await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+                await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
+                
+                loadingOverlay.textContent = "Model AI Berhasil Dimuat. Akses Kamera...";
+                startWebcam();
+            } catch (error) {
+                loadingOverlay.textContent = `Error memuat model AI. Coba muat ulang: ${error.message}`;
+                console.error("Error loading models:", error);
+            }
+        }
+
+        // --- 3. FUNGSI UTAMA DETEKSI ---
+
+        // Fungsi Deteksi Emosi Real-time
+        async function runDetection() {
+            if (!isDetecting || videoElement.paused || videoElement.ended) {
+                return; 
+            }
+
+            const displaySize = { width: videoElement.clientWidth, height: videoElement.clientHeight };
+            // Pastikan dimensi canvas sesuai dengan dimensi tampilan video
+            faceapi.matchDimensions(overlayCanvas, displaySize);
+            
+            // Lakukan deteksi wajah dan ekspresi
+            const detections = await faceapi.detectAllFaces(
+                videoElement, 
+                new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 })
+            )
+            .withFaceExpressions();
+
+            // Clear canvas sebelum menggambar
+            overlayCanvas.getContext('2d').clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+            
+            if (detections.length > 0) {
+                // Ambil wajah dengan probabilitas deteksi tertinggi
+                const bestDetection = detections.sort((a, b) => b.detection.score - a.detection.score)[0];
+                
+                // Ambil emosi dominan
+                const expressions = bestDetection.expressions;
+                const dominantEmotion = Object.keys(expressions).reduce((a, b) => expressions[a] > expressions[b] ? a : b);
+                
+                const currentValence = VALENCE_MAP[dominantEmotion] || 0; 
+                
+                // Update Counts
+                emotionCounts[dominantEmotion] = (emotionCounts[dominantEmotion] || 0) + 1;
+
+                // Update Valence History
+                valenceHistory.push(currentValence);
+                analysisCount++;
+                timeSeriesData.push({ count: analysisCount, valence: currentValence });
+
+                // Hitung Average Valence
+                const totalValence = valenceHistory.reduce((sum, val) => sum + val, 0);
+                avgValence = totalValence / valenceHistory.length;
+
+                // Update UI dan Charts
+                updateMetricsUI(dominantEmotion, avgValence);
+                updateCharts();
+                
+                // --- KOTAK WAJAH DAN LABEL EMOSI (Face Box) ---
+                const resizedDetections = faceapi.resizeResults([bestDetection], displaySize);
+                
+                // 1. Gambar Kotak Deteksi Wajah (Face Box)
+                const detectionBox = resizedDetections[0].detection.box;
+                const boxOptions = { 
+                    lineWidth: 3, 
+                    boxColor: '#34d399', // Warna hijau
+                    label: dominantEmotion.toUpperCase() // Label Emosi di Kotak
+                };
+                const drawBox = new faceapi.draw.DrawBox(detectionBox, boxOptions);
+                drawBox.draw(overlayCanvas);
+                // --- END FACE BOX ---
+                
+            } else {
+                // Jika tidak ada wajah terdeteksi
+                currentEmotionEl.textContent = 'No Face Detected';
+                overlayCanvas.getContext('2d').clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+            }
+
+            // Panggil lagi untuk loop
+            detectionInterval = requestAnimationFrame(runDetection);
+        }
+
+        // Fungsi Update Metrik dan Risiko
+        function updateMetricsUI(emotion, avgValence) {
+            currentEmotionEl.textContent = emotion.charAt(0).toUpperCase() + emotion.slice(1);
+            avgValenceEl.textContent = avgValence.toFixed(2);
+
+            let risk, color, feedback;
+            let avg = parseFloat(avgValence.toFixed(2));
+
+            if (avg >= 0.5) {
+                risk = "RENDAH (Sehat)";
+                color = "risk-low";
+                feedback = "Valence yang sangat baik. Anda menunjukkan kecenderungan suasana hati yang positif dan stabil.";
+            } else if (avg >= 0) {
+                risk = "SEDANG (Waspada)";
+                color = "risk-medium";
+                feedback = "Valence cenderung netral. Perhatikan apakah Anda merasa datar atau lelah. Disarankan istirahat sejenak.";
+            } else {
+                risk = "TINGGI (Butuh Perhatian)";
+                color = "risk-high";
+                feedback = "Valence negatif yang dominan terdeteksi. Ini bisa menjadi tanda stres akut atau kecemasan yang berlarut. Coba teknik relaksasi.";
+            }
+
+            riskIndicatorEl.textContent = `Risiko: ${risk}`;
+            // Hapus kelas warna lama dan tambahkan yang baru
+            const classList = riskIndicatorEl.className.split(' ').filter(c => !c.startsWith('risk-'));
+            riskIndicatorEl.className = classList.join(' ') + ` ${color}`;
+            feedbackEl.innerHTML = `<p>${feedback}</p>`;
+        }
+
+        // --- 4. FUNGSI KONTROL APP ---
+
+        function startWebcam() {
+            loadingOverlay.textContent = "Sedang Memuat Kamera...";
+            navigator.mediaDevices.getUserMedia({ video: true })
+                .then((s) => {
+                    stream = s;
+                    videoElement.srcObject = stream;
+                    videoElement.onloadedmetadata = () => {
+                        videoElement.play();
+                        // Pasang event listener untuk memastikan deteksi dimulai setelah video siap
+                        videoElement.addEventListener('play', () => {
+                            loadingOverlay.classList.add('hidden');
+                            startButton.disabled = false;
+                        });
+                        
+                        // Set dimensi canvas overlay agar sesuai dengan video
+                        const { videoWidth, videoHeight } = videoElement;
+                        overlayCanvas.width = videoWidth;
+                        overlayCanvas.height = videoHeight;
+                    };
+                })
+                .catch((err) => {
+                    loadingOverlay.textContent = `Error akses kamera: ${err.name}. Pastikan Anda memberikan izin.`;
+                    console.error("Error accessing webcam: ", err);
+                    startButton.disabled = true;
+                });
+        }
+
+        function startApp() {
+            if (isDetecting) return;
+            isDetecting = true;
+            startButton.disabled = true;
+            stopButton.disabled = false;
+            
+            // Memulai loop deteksi
+            runDetection(); 
+
+            // Initialize Charts jika belum ada, atau re-initialize jika sudah di-reset
+            if (!emotionCountChart) initializeCharts();
+        }
+
+        function stopDetection() {
+            if (!isDetecting) return;
+            isDetecting = false;
+            startButton.disabled = false;
+            stopButton.disabled = true;
+            
+            // Hentikan loop deteksi berbasis requestAnimationFrame
+            if (detectionInterval) cancelAnimationFrame(detectionInterval);
+            detectionInterval = null;
+            
+            // Clear canvas
+            overlayCanvas.getContext('2d').clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+        }
+
+        function resetData() {
+            stopDetection();
+            
+            // Reset Variabel
+            emotionCounts = {};
+            valenceHistory = [];
+            timeSeriesData = [];
+            analysisCount = 0;
+            avgValence = 0.0;
+            
+            // Reset UI
+            currentEmotionEl.textContent = 'None';
+            avgValenceEl.textContent = '0.00';
+            riskIndicatorEl.textContent = 'Risiko: RENDAH';
+            const classList = riskIndicatorEl.className.split(' ').filter(c => !c.startsWith('risk-'));
+            riskIndicatorEl.className = classList.join(' ') + ' risk-low';
+            feedbackEl.innerHTML = '<p>Mulai deteksi untuk melihat interpretasi risiko kesehatan mental Anda...</p>';
+
+            // Reset Charts
+            if (emotionCountChart) emotionCountChart.destroy();
+            if (valenceTrendChart) valenceTrendChart.destroy();
+            emotionCountChart = null;
+            valenceTrendChart = null;
+            initializeCharts(true); // Re-initialize with empty data
+        }
+        
+        function onWindowClose() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+        }
+        
+        window.addEventListener('beforeunload', onWindowClose);
+        
+        // --- 5. CHART.JS VISUALISASI ---
+
+        function initializeCharts(empty = false) {
+            // Data awal
+            const initialData = EMOTIONS.reduce((acc, emotion) => {
+                acc[emotion] = 0;
+                return acc;
+            }, {});
+
+            // A. Emotion Count Chart (Bar Chart)
+            const ctxCount = document.getElementById('emotionCountChart').getContext('2d');
+            emotionCountChart = new Chart(ctxCount, {
+                type: 'bar',
+                data: {
+                    labels: EMOTIONS.map(e => e.charAt(0).toUpperCase() + e.slice(1)), // Capitalize for better look
+                    datasets: [{
+                        label: 'Hitungan',
+                        data: empty ? Object.values(initialData) : EMOTIONS.map(e => emotionCounts[e] || 0),
+                        backgroundColor: EMOTIONS.map(e => {
+                            if (VALENCE_MAP[e] > 0) return '#34d399'; // Positive: Green
+                            if (VALENCE_MAP[e] < 0) return '#f87171'; // Negative: Red
+                            return '#9ca3af'; // Neutral: Gray
+                        }),
+                        borderColor: '#2a2a47',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    plugins: {
+                        legend: { display: false },
+                        title: { display: true, text: 'Frekuensi Emosi', color: '#e0e0e0' }
+                    },
+                    scales: {
+                        y: { 
+                            beginAtZero: true,
+                            ticks: { color: '#e0e0e0' },
+                            grid: { color: '#374151' } 
+                        },
+                        x: {
+                            ticks: { color: '#e0e0e0' },
+                            grid: { display: false }
+                        }
+                    }
+                }
+            });
+
+            // B. Valence Trend Chart (Line Chart)
+            const ctxTrend = document.getElementById('valenceTrendChart').getContext('2d');
+            valenceTrendChart = new Chart(ctxTrend, {
+                type: 'line',
+                data: {
+                    labels: empty ? [] : timeSeriesData.map(d => d.count),
+                    datasets: [{
+                        label: 'Skor Valence',
+                        data: empty ? [] : timeSeriesData.map(d => d.valence),
+                        borderColor: '#6366f1',
+                        backgroundColor: 'rgba(99, 102, 241, 0.2)',
+                        borderWidth: 2,
+                        tension: 0.1,
+                        pointRadius: 3
+                    },
+                    {
+                        label: 'Rata-rata',
+                        data: empty ? [] : Array(analysisCount).fill(avgValence),
+                        borderColor: '#f59e0b',
+                        borderWidth: 1,
+                        tension: 0.1,
+                        pointRadius: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    plugins: {
+                        legend: { labels: { color: '#e0e0e0' } },
+                        title: { display: true, text: 'Tren Valence Emosional (Time Series)', color: '#e0e0e0' }
+                    },
+                    scales: {
+                        y: { 
+                            min: -3, max: 3, 
+                            ticks: { color: '#e0e0e0' },
+                            grid: { color: '#374151' } 
+                        },
+                        x: {
+                            ticks: { color: '#e0e0e0' },
+                            grid: { color: '#374151' }
+                        }
+                    }
+                }
+            });
+        }
+
+        function updateCharts() {
+            if (!emotionCountChart || !valenceTrendChart) return;
+
+            // Update Bar Chart (Emotion Counts)
+            emotionCountChart.data.datasets[0].data = EMOTIONS.map(e => emotionCounts[e] || 0);
+            emotionCountChart.update('none');
+
+            // Update Line Chart (Valence Trend)
+            valenceTrendChart.data.labels = timeSeriesData.map(d => d.count);
+            valenceTrendChart.data.datasets[0].data = timeSeriesData.map(d => d.valence);
+            
+            // Update Average line
+            valenceTrendChart.data.datasets[1].data = Array(analysisCount).fill(avgValence);
+            
+            valenceTrendChart.update('none');
+        }
+
+        // --- 6. INITIAL SETUP ---
+        window.onload = loadModels; // Memuat model AI terlebih dahulu
+    </script>
+</body>
+</html>
